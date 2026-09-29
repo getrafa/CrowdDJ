@@ -179,11 +179,15 @@ export function useSpotifyPlayer({
     }
 
     try {
-      await player.togglePlay();
+      if (!isPlaying && currentUriRef.current && deviceId && token) {
+        await playTrack(currentUriRef.current);
+      } else {
+        await player.togglePlay();
+      }
     } catch (err) {
       setIsPlaying((prev) => !prev);
     }
-  }, [isSimulated, player]);
+  }, [isSimulated, player, isPlaying, deviceId, token, playTrack]);
 
   const pause = useCallback(async () => {
     setIsPlaying(false);

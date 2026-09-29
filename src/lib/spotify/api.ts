@@ -100,6 +100,39 @@ export async function getSpotifyUserProfile(accessToken: string) {
   return response.json();
 }
 
+export async function getUserPlaylists(accessToken: string) {
+  const response = await fetch('https://api.spotify.com/v1/me/playlists?limit=50', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch playlists: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.items || [];
+}
+
+export async function getPlaylistTracks(playlistId: string, accessToken: string) {
+  const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch playlist tracks: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  // Filter out null tracks or podcasts
+  return (data.items || [])
+    .map((item: any) => item.track)
+    .filter((track: any) => track && track.id && track.uri);
+}
+
 export async function searchSpotifyTracks(query: string, accessToken?: string) {
   if (!query.trim()) return [];
 

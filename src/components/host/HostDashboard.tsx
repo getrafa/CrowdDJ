@@ -25,9 +25,11 @@ import {
   ExternalLink,
   Plus,
   Music,
+  ListMusic,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SearchModal } from '@/components/guest/SearchModal';
+import { PlaylistModal } from '@/components/host/PlaylistModal';
 
 interface HostDashboardProps {
   roomCode: string;
@@ -39,6 +41,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const [isCopied, setIsCopied] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [appUrl, setAppUrl] = useState('');
 
@@ -90,6 +93,13 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     isHost: true,
     onAutoSkip: handleAutoSkip,
   });
+
+  // Sync token from room if not present in initial URL
+  useEffect(() => {
+    if (!token && room?.host_spotify_token) {
+      setToken(room.host_spotify_token);
+    }
+  }, [room, token]);
 
   // Spotify Web Playback SDK Hook
   const {
@@ -341,6 +351,16 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
                     <Plus className="w-4 h-4 stroke-[2.5]" />
                     <span>Add Song</span>
                   </button>
+
+                  {/* Host Playlists Button */}
+                  <button
+                    onClick={() => setIsPlaylistModalOpen(true)}
+                    className="px-4 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-white/10 flex items-center space-x-2 text-sm font-semibold transition-all active:scale-95"
+                    title="Load from your Spotify playlists"
+                  >
+                    <ListMusic className="w-4 h-4 text-emerald-400" />
+                    <span>My Playlists</span>
+                  </button>
                 </div>
 
                 {/* Simulated / Spotify SDK Mode Badge */}
@@ -358,15 +378,24 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
               </div>
               <h2 className="text-2xl font-black text-white mb-2">Jukebox is Idle</h2>
               <p className="text-neutral-400 text-sm max-w-md mx-auto mb-6">
-                Scan the QR code to join the room on your phone or search and add Spotify tracks right here!
+                Scan the QR code to join the room on your phone, or load from your Spotify playlists directly!
               </p>
-              <button
-                onClick={() => setIsSearchOpen(true)}
-                className="px-6 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-bold shadow-lg shadow-emerald-500/30 transition-all active:scale-95 inline-flex items-center space-x-2"
-              >
-                <Plus className="w-4 h-4 stroke-[2.5]" />
-                <span>Search &amp; Add Spotify Track</span>
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <button
+                  onClick={() => setIsPlaylistModalOpen(true)}
+                  className="px-6 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-bold shadow-lg shadow-emerald-500/30 transition-all active:scale-95 inline-flex items-center space-x-2"
+                >
+                  <ListMusic className="w-4 h-4" />
+                  <span>Load From My Spotify Playlists</span>
+                </button>
+                <button
+                  onClick={() => setIsSearchOpen(true)}
+                  className="px-6 py-3 rounded-full bg-neutral-800 hover:bg-neutral-700 text-white text-sm font-semibold border border-white/10 transition-all active:scale-95 inline-flex items-center space-x-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Search Any Track</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -530,6 +559,20 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
         userRequestsCount={0}
         onAddTrack={async (track, guestName) => {
           const item = await addTrackToQueue(track, guestName);
+          if (!currentPlaying) {
+            await playTrack(track.uri, track.duration_ms);
+          }
+          return item;
+        }}
+      />
+
+      {/* Host Spotify Playlists Modal */}
+      <PlaylistModal
+        isOpen={isPlaylistModalOpen}
+        onClose={() => setIsPlaylistModalOpen(false)}
+        roomCode={roomCode}
+        onAddTrack={async (track, requester) => {
+          const item = await addTrackToQueue(track, requester);
           if (!currentPlaying) {
             await playTrack(track.uri, track.duration_ms);
           }
