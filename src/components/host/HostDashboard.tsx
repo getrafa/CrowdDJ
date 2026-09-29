@@ -6,6 +6,7 @@ import { useRoomQueue } from '@/lib/hooks/useRoomQueue';
 import { useSpotifyPlayer } from '@/lib/hooks/useSpotifyPlayer';
 import { AmbientVisualizer } from '@/components/host/AmbientVisualizer';
 import { formatDuration } from '@/lib/utils';
+import { SpotifyTrack } from '@/types/database';
 import {
   Play,
   Pause,
@@ -19,31 +20,57 @@ import {
   Radio,
   Flame,
   Volume2,
+  VolumeX,
   Sparkles,
-  AlertTriangle,
   QrCode,
-  ExternalLink,
-  Plus,
-  Music,
+  Search,
   ListMusic,
+  Plus,
+  Home,
+  Library,
+  Music,
+  Clock,
+  Heart,
+  Loader2,
+  Shuffle,
+  Repeat,
+  Share2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { SearchModal } from '@/components/guest/SearchModal';
-import { PlaylistModal } from '@/components/host/PlaylistModal';
 
 interface HostDashboardProps {
   roomCode: string;
   initialToken?: string | null;
 }
 
+interface Playlist {
+  id: string;
+  name: string;
+  description: string;
+  images: { url: string }[];
+  tracks: { total: number };
+  owner: { display_name: string };
+}
+
 export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const [token, setToken] = useState<string | null>(initialToken || null);
   const [isCopied, setIsCopied] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [appUrl, setAppUrl] = useState('');
+
+  // Spotify Library & Search States
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
+  const [playlistTracks, setPlaylistTracks] = useState<SpotifyTrack[]>([]);
+  const [loadingPlaylists, setLoadingPlaylists] = useState(false);
+  const [loadingTracks, setLoadingTracks] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SpotifyTrack[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [volume, setVolume] = useState(80);
+  const [isMuted, setIsMuted] = useState(false);
+  const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
 
   // Determine current domain for QR code
   useEffect(() => {
@@ -52,7 +79,8 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     }
   }, []);
 
-  const joinUrl = `${appUrl}/join/${roomCode.toUpperCase()}`;
+  const safeRoomCode = roomCode ? roomCode.toUpperCase() : 'PARTY';
+  const joinUrl = `${appUrl}/join/${safeRoomCode}`;
 
   // Advance to next song workflow
   const handleAdvanceTrack = useCallback(
@@ -89,7 +117,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     skipTrack,
     refreshQueue,
   } = useRoomQueue({
-    roomCode,
+    roomCode: safeRoomCode,
     isHost: true,
     onAutoSkip: handleAutoSkip,
   });
@@ -124,7 +152,113 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     }
   }, [currentPlaying, durationMs, setDurationMs]);
 
-  // Handle Fullscreen toggle for TV view
+  // Fetch host's actual Spotify playlists
+  const fetchPlaylists = useCallback(async () => {
+    setLoadingPlaylists(true);
+    try {
+      const res = await fetch(`/api/spotify/playlists?roomCode=${encodeURIComponent(safeRoomCode)}`);
+      const data = await res.json();
+      if (data.playlists && Array.isArray(data.playlists)) {
+        setPlaylists(data.playlists);
+        if (data.playlists.length > 0 && !selectedPlaylist) {
+          handleSelectPlaylist(data.playlists[0]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load host playlists:', err);
+    } finally {
+      setLoadingPlaylists(false);
+    }
+  }, [safeRoomCode, selectedPlaylist]);
+
+  useEffect(() => {
+    fetchPlaylists();
+  }, [fetchPlaylists]);
+
+  // Fetch songs inside selected playlist
+  const handleSelectPlaylist = async (playlist: Playlist) => {
+    setSelectedPlaylist(playlist);
+    setSearchQuery('');
+    setLoadingTracks(true);
+    try {
+      const res = await fetch(
+        `/api/spotify/playlists/${playlist.id}?roomCode=${encodeURIComponent(safeRoomCode)}`
+      );
+      const data = await res.json();
+      if (data.tracks && Array.isArray(data.tracks)) {
+        setPlaylistTracks(data.tracks);
+      }
+    } catch (err) {
+      console.error('Failed to load playlist songs:', err);
+    } finally {
+      setLoadingTracks(false);
+    }
+  };
+
+  // Live Spotify Track Search
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const res = await fetch(
+          `/api/spotify/search?q=${encodeURIComponent(searchQuery)}&roomCode=${encodeURIComponent(safeRoomCode)}`
+        );
+        const data = await res.json();
+        if (data.tracks) {
+          setSearchResults(data.tracks);
+        }
+      } catch (err) {
+        console.error('Search error:', err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, safeRoomCode]);
+
+  // Play track immediately & queue to party
+  const handlePlayNow = async (track: SpotifyTrack) => {
+    try {
+      await addTrackToQueue(track, 'Host');
+      await playTrack(track.uri, track.duration_ms);
+      setAddedIds((prev) => new Set(prev).add(track.id));
+    } catch (err) {
+      console.error('Error playing track:', err);
+    }
+  };
+
+  // Add track to queue only
+  const handleAddToQueue = async (track: SpotifyTrack, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await addTrackToQueue(track, 'Host');
+      setAddedIds((prev) => new Set(prev).add(track.id));
+      if (!currentPlaying) {
+        await playTrack(track.uri, track.duration_ms);
+      }
+    } catch (err) {
+      console.error('Error adding track to queue:', err);
+    }
+  };
+
+  // Queue entire playlist at once
+  const handleQueueAllPlaylist = async () => {
+    if (!playlistTracks.length) return;
+    for (const track of playlistTracks) {
+      await addTrackToQueue(track, 'Host');
+    }
+    if (!currentPlaying && playlistTracks[0]) {
+      await playTrack(playlistTracks[0].uri, playlistTracks[0].duration_ms);
+    }
+  };
+
+  // Fullscreen toggle
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
@@ -146,397 +280,501 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const currentDownvotes = currentPlaying?.downvotes || 0;
   const effectiveGuests = Math.max(1, activeGuests);
   const currentDownvotePercent = Math.round((currentDownvotes / effectiveGuests) * 100);
-  const isNearSkip = currentDownvotePercent >= skipThresholdPercent * 0.7;
 
   const effectiveDuration = durationMs || currentPlaying?.duration_ms || 180000;
   const progressPercent = Math.min(100, (progressMs / effectiveDuration) * 100);
 
+  const displayedTracks = searchQuery.trim() ? searchResults : playlistTracks;
+
   return (
-    <div className="relative min-h-screen bg-black text-white flex flex-col overflow-x-hidden selection:bg-emerald-500 selection:text-black">
-      {/* Dynamic Ambient Visualizer Background */}
+    <div className="flex flex-col h-screen w-screen bg-[#121212] text-white overflow-hidden font-sans select-none">
+      {/* Dynamic Ambient Background Glow */}
       <AmbientVisualizer
-        albumArtUrl={currentPlaying?.album_art_url}
+        albumArtUrl={currentPlaying?.album_art_url || selectedPlaylist?.images?.[0]?.url}
         isPlaying={isPlaying}
       />
 
-      {/* Host TV Header Bar */}
-      <header className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-white/10 bg-black/40 backdrop-blur-md">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/10">
-            <Radio className="w-5 h-5 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="font-black text-lg tracking-wider text-white">CrowdDJ</span>
-              <span className="text-xs px-2 py-0.5 rounded-md bg-white/10 text-neutral-300 font-mono">
-                HOST DECK
+      {/* Main 3-Column Workspace */}
+      <div className="relative z-10 flex flex-1 overflow-hidden">
+        {/* 1. LEFT SIDEBAR: Spotify Navigation & Playlists */}
+        <aside className="w-64 bg-black/85 backdrop-blur-md flex flex-col border-r border-[#282828] p-4 shrink-0">
+          {/* Top Brand */}
+          <div className="flex items-center space-x-2.5 px-2 mb-6">
+            <div className="w-8 h-8 rounded-full bg-[#1db954] flex items-center justify-center text-black shadow-lg shadow-[#1db954]/20">
+              <Radio className="w-4 h-4 animate-pulse stroke-[2.5]" />
+            </div>
+            <div>
+              <span className="font-black text-base tracking-tight text-white">CrowdDJ</span>
+              <span className="text-[10px] block font-mono text-[#1db954] uppercase tracking-wider font-bold">
+                Spotify Host
               </span>
             </div>
-            <p className="text-xs text-neutral-400">TV Display &amp; Audio Broadcast</p>
-          </div>
-        </div>
-
-        {/* Center: Prominent Room Code Pin */}
-        <div className="flex items-center space-x-3 bg-neutral-900/80 border border-neutral-700/80 px-4 py-2 rounded-2xl shadow-xl">
-          <span className="text-xs uppercase tracking-wider text-neutral-400 font-medium">
-            Room Code:
-          </span>
-          <span className="font-mono text-2xl font-black tracking-widest text-emerald-400 select-all">
-            {roomCode.toUpperCase()}
-          </span>
-        </div>
-
-        {/* Right Controls: Presence, Copy Link, Fullscreen */}
-        <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs">
-            <Users className="w-4 h-4 text-emerald-400" />
-            <span className="font-semibold text-white">{activeGuests}</span>
-            <span className="text-neutral-400">Guests</span>
           </div>
 
-          <button
-            onClick={copyJoinLink}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs transition-colors"
-            title="Copy Guest Join Link"
-          >
-            {isCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-neutral-400" />}
-            <span>{isCopied ? 'Copied' : 'Share Link'}</span>
-          </button>
-
-          <button
-            onClick={toggleFullscreen}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-400 hover:text-white transition-colors"
-            title="Toggle TV Fullscreen"
-          >
-            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-          </button>
-        </div>
-      </header>
-
-      {/* Main Split Layout: Hero Player (Left) + Upcoming Queue Feed & QR (Right) */}
-      <main className="relative z-10 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 p-6 lg:p-8 max-w-7xl mx-auto w-full items-start">
-        {/* HERO SECTION: Now Playing (8 Columns on desktop) */}
-        <div className="lg:col-span-8 flex flex-col space-y-6">
-          {currentPlaying ? (
-            <div className="relative rounded-3xl bg-neutral-900/60 border border-white/10 backdrop-blur-xl p-8 shadow-2xl overflow-hidden">
-              {/* Dynamic Glow Aura */}
-              <div
-                className="absolute -top-24 -left-24 w-72 h-72 rounded-full opacity-30 blur-3xl pointer-events-none"
-                style={{ backgroundColor: '#10b981' }}
+          {/* Navigation Links */}
+          <nav className="space-y-1 mb-6 text-sm font-semibold">
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                if (playlists[0]) handleSelectPlaylist(playlists[0]);
+              }}
+              className="flex items-center space-x-3 w-full px-3 py-2.5 rounded-lg text-neutral-300 hover:text-white hover:bg-[#282828] transition-colors"
+            >
+              <Home className="w-5 h-5 text-neutral-400" />
+              <span>Your Library</span>
+            </button>
+            <div className="relative">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search Spotify..."
+                className="w-full bg-[#242424] border border-[#3e3e3e] rounded-full pl-9 pr-3 py-2 text-xs text-white placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-[#1db954]"
               />
-
-              <div className="flex flex-col md:flex-row items-center gap-8">
-                {/* Large Album Artwork with Vinyl Spin Animation */}
-                <div className="relative group shrink-0">
-                  <div className="w-56 h-56 md:w-64 md:h-64 rounded-2xl overflow-hidden shadow-2xl border border-white/20 relative z-10 bg-neutral-950">
-                    <img
-                      src={currentPlaying.album_art_url}
-                      alt={currentPlaying.track_name}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-
-                  {/* Spinning Vinyl Record illusion behind sleeve */}
-                  <div
-                    className={`absolute -right-6 top-3 w-56 h-56 md:w-60 md:h-60 rounded-full bg-neutral-950 border-4 border-neutral-800 shadow-2xl flex items-center justify-center transition-transform z-0 ${
-                      isPlaying ? 'animate-spin-slow' : ''
-                    }`}
-                  >
-                    <div className="w-20 h-20 rounded-full border-4 border-neutral-700 bg-neutral-900 flex items-center justify-center">
-                      <div className="w-5 h-5 rounded-full bg-emerald-500/80" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Track Details & Requester Info */}
-                <div className="flex-1 flex flex-col justify-center text-center md:text-left min-w-0">
-                  <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold uppercase tracking-wider mb-3 self-center md:self-start">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
-                    <span>Now Playing</span>
-                  </div>
-
-                  <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight truncate mb-1">
-                    {currentPlaying.track_name}
-                  </h2>
-                  <p className="text-lg md:text-xl text-neutral-300 font-medium truncate mb-4">
-                    {currentPlaying.artist_name}
-                  </p>
-
-                  <div className="inline-flex items-center space-x-2 text-sm text-neutral-400 self-center md:self-start bg-white/5 px-3 py-1.5 rounded-xl border border-white/5">
-                    <Sparkles className="w-4 h-4 text-party-purple" />
-                    <span>
-                      Requested by <strong className="text-emerald-300">@{currentPlaying.requested_by_name}</strong>
-                    </span>
-                  </div>
-
-                  {/* Auto-Skip Threshold Warning Meter */}
-                  <div className="mt-5 p-3 rounded-2xl bg-neutral-950/60 border border-white/5">
-                    <div className="flex items-center justify-between text-xs mb-1.5">
-                      <span className="text-neutral-400 flex items-center gap-1">
-                        <Flame className="w-3.5 h-3.5 text-party-pink" />
-                        <span>Downvotes: <strong>{currentDownvotes}</strong> / {effectiveGuests} guests ({currentDownvotePercent}%)</span>
-                      </span>
-                      <span className="text-neutral-500">
-                        Skip Trigger: {skipThresholdPercent}%
-                      </span>
-                    </div>
-                    <div className="w-full bg-neutral-800 rounded-full h-2 overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-500 rounded-full ${
-                          currentDownvotePercent >= skipThresholdPercent
-                            ? 'bg-rose-500'
-                            : isNearSkip
-                            ? 'bg-amber-400'
-                            : 'bg-emerald-500'
-                        }`}
-                        style={{ width: `${Math.min(100, (currentDownvotePercent / skipThresholdPercent) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Progress Bar */}
-              <div className="mt-8 space-y-2">
-                <div className="w-full bg-neutral-800/80 rounded-full h-2.5 overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300 shadow-md shadow-emerald-500/20"
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                </div>
-                <div className="flex justify-between text-xs font-mono text-neutral-400">
-                  <span>{formatDuration(progressMs)}</span>
-                  <span>{formatDuration(effectiveDuration)}</span>
-                </div>
-              </div>
-
-              {/* Host Audio Player Controls */}
-              <div className="mt-6 pt-6 border-t border-white/10 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center space-x-3">
-                  {/* Play / Pause */}
-                  <button
-                    onClick={togglePlay}
-                    className="w-12 h-12 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black flex items-center justify-center shadow-lg shadow-emerald-500/30 transition-transform active:scale-95"
-                    title={isPlaying ? 'Pause' : 'Play'}
-                  >
-                    {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-0.5" />}
-                  </button>
-
-                  {/* Skip Song */}
-                  <button
-                    onClick={() => handleAdvanceTrack('skip')}
-                    className="px-4 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-white flex items-center space-x-2 text-sm font-semibold transition-all border border-white/5 active:scale-95"
-                    title="Skip to next song in queue"
-                  >
-                    <SkipForward className="w-4 h-4" />
-                    <span>Skip Next</span>
-                  </button>
-
-                  {/* Host Veto Button */}
-                  <button
-                    onClick={() => handleAdvanceTrack('veto')}
-                    className="px-4 py-3 rounded-2xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/40 flex items-center space-x-2 text-sm font-semibold transition-all active:scale-95"
-                    title="Host Veto: Instantly remove & skip inappropriate song"
-                  >
-                    <Ban className="w-4 h-4" />
-                    <span>Host Veto</span>
-                  </button>
-
-                  {/* Add Track Button */}
-                  <button
-                    onClick={() => setIsSearchOpen(true)}
-                    className="px-4 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black flex items-center space-x-2 text-sm font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
-                    title="Search and add Spotify track"
-                  >
-                    <Plus className="w-4 h-4 stroke-[2.5]" />
-                    <span>Add Song</span>
-                  </button>
-
-                  {/* Host Playlists Button */}
-                  <button
-                    onClick={() => setIsPlaylistModalOpen(true)}
-                    className="px-4 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-white/10 flex items-center space-x-2 text-sm font-semibold transition-all active:scale-95"
-                    title="Load from your Spotify playlists"
-                  >
-                    <ListMusic className="w-4 h-4 text-emerald-400" />
-                    <span>My Playlists</span>
-                  </button>
-                </div>
-
-                {/* Simulated / Spotify SDK Mode Badge */}
-                <div className="text-right">
-                  <span className="text-[11px] text-neutral-400 bg-white/5 px-2.5 py-1 rounded-full border border-white/10">
-                    {isSimulated ? 'Browser Audio Deck (Ready)' : 'Spotify Connect Active'}
-                  </span>
-                </div>
-              </div>
+              <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-2.5" />
             </div>
-          ) : (
-            <div className="rounded-3xl bg-neutral-900/60 border border-white/10 backdrop-blur-xl p-12 text-center shadow-2xl">
-              <div className="w-20 h-20 rounded-3xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 mx-auto mb-4">
-                <Radio className="w-10 h-10 animate-pulse" />
-              </div>
-              <h2 className="text-2xl font-black text-white mb-2">Jukebox is Idle</h2>
-              <p className="text-neutral-400 text-sm max-w-md mx-auto mb-6">
-                Scan the QR code to join the room on your phone, or load from your Spotify playlists directly!
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-3">
-                <button
-                  onClick={() => setIsPlaylistModalOpen(true)}
-                  className="px-6 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-bold shadow-lg shadow-emerald-500/30 transition-all active:scale-95 inline-flex items-center space-x-2"
-                >
-                  <ListMusic className="w-4 h-4" />
-                  <span>Load From My Spotify Playlists</span>
-                </button>
-                <button
-                  onClick={() => setIsSearchOpen(true)}
-                  className="px-6 py-3 rounded-full bg-neutral-800 hover:bg-neutral-700 text-white text-sm font-semibold border border-white/10 transition-all active:scale-95 inline-flex items-center space-x-2"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Search Any Track</span>
-                </button>
-              </div>
-            </div>
-          )}
+          </nav>
 
-          {/* Equalizer Visualizer Bars */}
-          <div className="flex items-end justify-center space-x-1.5 h-10 px-4">
-            <span className={`w-1.5 bg-emerald-500/80 rounded-full ${isPlaying ? 'animate-equalizer-1' : 'h-1'}`} />
-            <span className={`w-1.5 bg-teal-400/80 rounded-full ${isPlaying ? 'animate-equalizer-2' : 'h-1.5'}`} />
-            <span className={`w-1.5 bg-party-purple/80 rounded-full ${isPlaying ? 'animate-equalizer-3' : 'h-2'}`} />
-            <span className={`w-1.5 bg-party-pink/80 rounded-full ${isPlaying ? 'animate-equalizer-4' : 'h-1'}`} />
-            <span className={`w-1.5 bg-emerald-400/80 rounded-full ${isPlaying ? 'animate-equalizer-2' : 'h-2.5'}`} />
-            <span className={`w-1.5 bg-indigo-400/80 rounded-full ${isPlaying ? 'animate-equalizer-1' : 'h-1'}`} />
-            <span className={`w-1.5 bg-emerald-500/80 rounded-full ${isPlaying ? 'animate-equalizer-3' : 'h-1.5'}`} />
+          {/* Library Header */}
+          <div className="flex items-center justify-between px-2 pb-2 border-b border-[#282828] text-xs font-bold text-neutral-400 uppercase tracking-wider">
+            <div className="flex items-center space-x-2">
+              <Library className="w-4 h-4" />
+              <span>Your Playlists</span>
+            </div>
+            <span className="text-[10px] font-mono text-[#1db954]">{playlists.length}</span>
           </div>
-        </div>
 
-        {/* SIDEBAR: Top 5 Upcoming Songs + Dynamic QR Code (4 Columns on desktop) */}
-        <div className="lg:col-span-4 flex flex-col space-y-6">
-          {/* Prominent Dynamic QR Code Card */}
-          <div className="rounded-3xl bg-neutral-900/80 border border-white/10 backdrop-blur-xl p-6 shadow-2xl flex flex-col items-center text-center">
-            <div className="flex items-center space-x-2 text-xs font-bold uppercase tracking-wider text-emerald-400 mb-3">
-              <QrCode className="w-4 h-4" />
-              <span>Scan to Join the Party</span>
+          {/* Playlists List */}
+          <div className="flex-1 overflow-y-auto mt-2 space-y-1 pr-1 custom-scrollbar">
+            {loadingPlaylists && (
+              <div className="p-4 text-center text-xs text-neutral-500 flex items-center justify-center space-x-2">
+                <Loader2 className="w-4 h-4 animate-spin text-[#1db954]" />
+                <span>Loading playlists...</span>
+              </div>
+            )}
+
+            {playlists.map((pl) => {
+              const isSelected = selectedPlaylist?.id === pl.id && !searchQuery.trim();
+              return (
+                <button
+                  key={pl.id}
+                  onClick={() => handleSelectPlaylist(pl)}
+                  className={`flex items-center space-x-3 w-full p-2 rounded-xl text-left transition-all ${
+                    isSelected
+                      ? 'bg-[#282828] text-white shadow-md'
+                      : 'text-neutral-400 hover:text-white hover:bg-[#1a1a1a]'
+                  }`}
+                >
+                  <img
+                    src={pl.images?.[0]?.url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=60'}
+                    alt={pl.name}
+                    className="w-10 h-10 rounded-lg object-cover bg-neutral-900 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-xs font-bold truncate ${isSelected ? 'text-[#1db954]' : 'text-white'}`}>
+                      {pl.name}
+                    </p>
+                    <p className="text-[10px] text-neutral-500 truncate">
+                      Playlist &bull; {pl.owner?.display_name || 'Spotify'}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        {/* 2. CENTER: Spotify Content Area (Songs & Tracks) */}
+        <main className="flex-1 flex flex-col overflow-y-auto bg-gradient-to-b from-[#1e3264]/40 via-[#121212]/90 to-[#121212] backdrop-blur-sm">
+          {/* Header Banner for Selected Playlist or Search */}
+          <div className="p-8 flex items-end space-x-6 bg-gradient-to-b from-white/10 to-transparent">
+            {searchQuery.trim() ? (
+              <div className="w-44 h-44 rounded-2xl bg-[#282828] shadow-2xl flex items-center justify-center text-[#1db954] shrink-0 border border-white/10">
+                <Search className="w-16 h-16" />
+              </div>
+            ) : (
+              <img
+                src={selectedPlaylist?.images?.[0]?.url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400'}
+                alt={selectedPlaylist?.name || 'Playlist'}
+                className="w-44 h-44 rounded-2xl object-cover shadow-2xl shrink-0 border border-white/10"
+              />
+            )}
+
+            <div className="min-w-0 flex-1">
+              <span className="text-xs uppercase font-extrabold tracking-widest text-[#1db954]">
+                {searchQuery.trim() ? 'Spotify Search' : 'Public Playlist'}
+              </span>
+              <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-white tracking-tight mt-1 truncate">
+                {searchQuery.trim() ? `Search: "${searchQuery}"` : selectedPlaylist?.name || 'Your Spotify Music'}
+              </h1>
+              <p className="text-xs sm:text-sm text-neutral-400 mt-2 line-clamp-2">
+                {searchQuery.trim()
+                  ? `Showing top Spotify tracks matching "${searchQuery}"`
+                  : selectedPlaylist?.description || 'Select any song to play or queue to the party room.'}
+              </p>
+              <div className="flex items-center space-x-2 mt-3 text-xs text-neutral-300">
+                <span className="font-semibold text-white">
+                  {selectedPlaylist?.owner?.display_name || 'Host'}
+                </span>
+                <span>&bull;</span>
+                <span>{displayedTracks.length} songs</span>
+              </div>
             </div>
+          </div>
 
-            {/* QR Code Container */}
+          {/* Action Bar: Big Green Play Button & Queue All */}
+          <div className="px-8 py-4 flex items-center space-x-4 border-b border-[#282828]">
+            <button
+              onClick={() => {
+                if (displayedTracks[0]) handlePlayNow(displayedTracks[0]);
+              }}
+              className="w-14 h-14 rounded-full bg-[#1db954] hover:bg-[#1ed760] text-black flex items-center justify-center shadow-xl shadow-[#1db954]/30 hover:scale-105 active:scale-95 transition-all"
+              title="Play Playlist"
+            >
+              {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-1" />}
+            </button>
+
+            {!searchQuery.trim() && (
+              <button
+                onClick={handleQueueAllPlaylist}
+                className="px-4 py-2.5 rounded-full bg-[#282828] hover:bg-[#383838] text-white text-xs font-bold transition-all border border-white/5 active:scale-95 flex items-center space-x-2"
+              >
+                <Plus className="w-4 h-4 text-[#1db954]" />
+                <span>Import Playlist to Party Queue</span>
+              </button>
+            )}
+          </div>
+
+          {/* Songs Table Header */}
+          <div className="px-8 py-3 text-xs font-semibold text-neutral-400 grid grid-cols-12 gap-4 border-b border-[#282828]/60 uppercase tracking-wider sticky top-0 bg-[#121212]/95 backdrop-blur-md z-10">
+            <span className="col-span-1 text-center">#</span>
+            <span className="col-span-6">Title</span>
+            <span className="col-span-3">Album</span>
+            <span className="col-span-2 text-right flex items-center justify-end pr-2">
+              <Clock className="w-4 h-4 mr-1" />
+              <span>Time</span>
+            </span>
+          </div>
+
+          {/* Songs Table Rows */}
+          <div className="px-6 py-2 flex-1 space-y-1">
+            {loadingTracks && (
+              <div className="py-20 text-center text-xs text-neutral-400 flex flex-col items-center">
+                <Loader2 className="w-8 h-8 animate-spin text-[#1db954] mb-2" />
+                <span>Loading tracks from Spotify...</span>
+              </div>
+            )}
+
+            {displayedTracks.map((track, idx) => {
+              const isCurrent = currentPlaying?.track_uri === track.uri;
+              const isAdded = addedIds.has(track.id);
+
+              return (
+                <div
+                  key={`${track.id}-${idx}`}
+                  onClick={() => handlePlayNow(track)}
+                  className={`grid grid-cols-12 gap-4 items-center px-4 py-2.5 rounded-xl transition-all group cursor-pointer ${
+                    isCurrent
+                      ? 'bg-[#282828] text-[#1db954]'
+                      : 'hover:bg-[#282828]/60 text-neutral-300 hover:text-white'
+                  }`}
+                >
+                  {/* # or Play Icon */}
+                  <div className="col-span-1 flex items-center justify-center text-xs font-mono">
+                    <span className="group-hover:hidden">{idx + 1}</span>
+                    <Play className="w-4 h-4 fill-current hidden group-hover:inline-block text-[#1db954]" />
+                  </div>
+
+                  {/* Title & Artist */}
+                  <div className="col-span-6 flex items-center space-x-3 min-w-0">
+                    <img
+                      src={track.album?.images?.[0]?.url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80'}
+                      alt={track.name}
+                      className="w-10 h-10 rounded-md object-cover bg-black shrink-0 shadow-md"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className={`text-sm font-semibold truncate ${isCurrent ? 'text-[#1db954]' : 'text-white'}`}>
+                        {track.name}
+                      </p>
+                      <p className="text-xs text-neutral-400 truncate">
+                        {track.artists?.map((a: any) => a.name).join(', ')}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Album Name */}
+                  <div className="col-span-3 text-xs text-neutral-400 truncate">
+                    {track.album?.name || 'Single'}
+                  </div>
+
+                  {/* Duration & Quick Queue Action */}
+                  <div className="col-span-2 flex items-center justify-end space-x-3 text-xs pr-2">
+                    <button
+                      onClick={(e) => handleAddToQueue(track, e)}
+                      className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${
+                        isAdded
+                          ? 'bg-[#1db954]/20 text-[#1db954]'
+                          : 'bg-[#383838] hover:bg-[#1db954] hover:text-black text-white'
+                      }`}
+                      title="Add to CrowdDJ party queue"
+                    >
+                      {isAdded ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                    </button>
+                    <span className="font-mono text-neutral-400">{formatDuration(track.duration_ms)}</span>
+                  </div>
+                </div>
+              );
+            })}
+
+            {displayedTracks.length === 0 && !loadingTracks && (
+              <div className="py-20 text-center text-xs text-neutral-500">
+                No songs found in this selection.
+              </div>
+            )}
+          </div>
+        </main>
+
+        {/* 3. RIGHT SIDEBAR: CrowdDJ Party HUD & Live Queue */}
+        <aside className="w-80 bg-black/90 backdrop-blur-md border-l border-[#282828] flex flex-col p-4 shrink-0 overflow-y-auto">
+          {/* Top Room Banner */}
+          <div className="p-4 rounded-2xl bg-[#181818] border border-[#282828] mb-4 text-center">
+            <span className="text-[11px] uppercase tracking-wider font-extrabold text-[#1db954]">
+              Party Room Code
+            </span>
+            <div className="font-mono text-3xl font-black tracking-widest text-white mt-1">
+              {safeRoomCode}
+            </div>
+            <div className="flex items-center justify-center space-x-2 mt-2 text-xs text-neutral-400">
+              <Users className="w-3.5 h-3.5 text-[#1db954]" />
+              <span>{activeGuests} {activeGuests === 1 ? 'Guest' : 'Guests'} online</span>
+            </div>
+          </div>
+
+          {/* Dynamic Guest QR Code */}
+          <div className="p-4 rounded-2xl bg-[#181818] border border-[#282828] mb-4 flex flex-col items-center text-center">
+            <span className="text-xs font-bold text-white mb-2 flex items-center space-x-1.5">
+              <QrCode className="w-4 h-4 text-[#1db954]" />
+              <span>Scan to Vote &amp; Request</span>
+            </span>
+
             <div
               onClick={() => setIsQrModalOpen(true)}
-              className="p-3 bg-white rounded-2xl shadow-xl hover:scale-105 transition-transform cursor-pointer group"
+              className="p-3 bg-white rounded-xl shadow-xl hover:scale-105 transition-transform cursor-pointer"
               title="Click to expand QR Code"
             >
-              <QRCodeSVG
-                value={joinUrl}
-                size={160}
-                level="M"
-                includeMargin={false}
-              />
+              <QRCodeSVG value={joinUrl} size={150} level="M" />
             </div>
 
-            <p className="mt-3 font-mono text-xl font-black text-white tracking-widest">
-              {roomCode.toUpperCase()}
-            </p>
-            <p className="text-xs text-neutral-400 mt-1 max-w-[220px]">
-              No app download required. Scan to vote &amp; request tracks!
-            </p>
-
             <button
-              onClick={() => window.open(joinUrl, '_blank')}
-              className="mt-3 flex items-center space-x-1.5 text-xs text-emerald-400 hover:text-emerald-300 font-semibold"
+              onClick={copyJoinLink}
+              className="mt-3 flex items-center space-x-1.5 text-xs text-neutral-400 hover:text-white"
             >
-              <span>Open Guest View in new tab</span>
-              <ExternalLink className="w-3.5 h-3.5" />
+              {isCopied ? <Check className="w-3.5 h-3.5 text-[#1db954]" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{isCopied ? 'Link Copied!' : 'Copy Guest Link'}</span>
             </button>
           </div>
 
-          {/* Top 5 Upcoming Songs in Queue */}
-          <div className="rounded-3xl bg-neutral-900/80 border border-white/10 backdrop-blur-xl p-6 shadow-2xl flex-1 flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-2">
-                <Flame className="w-4 h-4 text-party-pink" />
-                <h3 className="font-bold text-sm uppercase tracking-wider text-white">
-                  Top 5 Upcoming
-                </h3>
-              </div>
-              <span className="text-xs text-neutral-400 font-mono">
-                {queue.length} in queue
+          {/* Crowd Auto-Skip Meter */}
+          <div className="p-3.5 rounded-2xl bg-[#181818] border border-[#282828] mb-4">
+            <div className="flex justify-between text-xs mb-1.5">
+              <span className="text-neutral-400 flex items-center gap-1">
+                <Flame className="w-3.5 h-3.5 text-rose-500" />
+                <span>Downvotes: <strong>{currentDownvotes}</strong> / {effectiveGuests}</span>
               </span>
+              <span className="text-neutral-500 font-mono">{currentDownvotePercent}% / {skipThresholdPercent}%</span>
+            </div>
+            <div className="w-full bg-[#282828] rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 rounded-full ${
+                  currentDownvotePercent >= skipThresholdPercent ? 'bg-rose-500' : 'bg-[#1db954]'
+                }`}
+                style={{ width: `${Math.min(100, (currentDownvotePercent / skipThresholdPercent) * 100)}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Live Top Upcoming Queue */}
+          <div className="flex-1 flex flex-col">
+            <div className="flex items-center justify-between mb-3 px-1">
+              <h3 className="text-xs uppercase font-extrabold tracking-wider text-white flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-party-purple" />
+                <span>Live Queue ({queue.length})</span>
+              </h3>
+              <span className="text-[10px] text-neutral-500">Auto-Sorted</span>
             </div>
 
-            {/* Queue List */}
-            <div className="space-y-3 flex-1">
+            <div className="space-y-2 flex-1">
               {queue.slice(0, 5).map((item, index) => (
                 <div
                   key={item.id}
-                  className="flex items-center justify-between p-2.5 rounded-2xl bg-white/5 border border-white/5 hover:border-white/10 transition-all"
+                  className="flex items-center justify-between p-2 rounded-xl bg-[#181818] border border-white/5 hover:border-white/10 transition-all"
                 >
-                  <div className="flex items-center space-x-3 min-w-0 flex-1 mr-2">
+                  <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-2">
                     <span className="text-xs font-mono font-bold text-neutral-500 w-4 text-center">
                       #{index + 1}
                     </span>
                     <img
                       src={item.album_art_url}
                       alt={item.track_name}
-                      className="w-10 h-10 rounded-xl object-cover bg-neutral-950 shrink-0 shadow-md"
+                      className="w-9 h-9 rounded-lg object-cover bg-black shrink-0"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-bold text-white truncate">
-                        {item.track_name}
-                      </p>
-                      <p className="text-[11px] text-neutral-400 truncate">
-                        {item.artist_name}
-                      </p>
-                      <span className="text-[10px] text-neutral-500">
-                        @{item.requested_by_name}
-                      </span>
+                      <p className="text-xs font-bold text-white truncate">{item.track_name}</p>
+                      <p className="text-[10px] text-neutral-400 truncate">@{item.requested_by_name}</p>
                     </div>
                   </div>
 
-                  {/* Score Badge */}
-                  <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-neutral-800/80 border border-neutral-700/60 shrink-0">
-                    <span
-                      className={`text-xs font-mono font-bold ${
-                        item.score > 0
-                          ? 'text-emerald-400'
-                          : item.score < 0
-                          ? 'text-rose-400'
-                          : 'text-neutral-400'
-                      }`}
-                    >
-                      {item.score > 0 ? `+${item.score}` : item.score}
-                    </span>
-                  </div>
+                  <span
+                    className={`text-xs font-mono font-bold px-2 py-0.5 rounded-md ${
+                      item.score > 0
+                        ? 'bg-[#1db954]/20 text-[#1db954]'
+                        : item.score < 0
+                        ? 'bg-rose-500/20 text-rose-400'
+                        : 'bg-neutral-800 text-neutral-400'
+                    }`}
+                  >
+                    {item.score > 0 ? `+${item.score}` : item.score}
+                  </span>
                 </div>
               ))}
 
               {queue.length === 0 && (
-                <div className="text-center py-8 text-neutral-500 text-xs">
-                  No upcoming songs in the queue yet.
+                <div className="p-6 text-center text-xs text-neutral-500">
+                  Queue is empty. Select a song or scan the QR code to vote!
                 </div>
               )}
             </div>
           </div>
-        </div>
-      </main>
+        </aside>
+      </div>
 
-      {/* Full-Screen QR Code Modal */}
+      {/* 4. BOTTOM BAR: Authentic Spotify Web Player Bar */}
+      <footer className="h-24 bg-[#181818] border-t border-[#282828] px-4 flex items-center justify-between relative z-20 shrink-0">
+        {/* Left: Track Information */}
+        <div className="flex items-center space-x-3.5 w-1/4 min-w-[200px]">
+          {currentPlaying ? (
+            <>
+              <img
+                src={currentPlaying.album_art_url}
+                alt={currentPlaying.track_name}
+                className="w-14 h-14 rounded-lg object-cover bg-black shadow-lg shrink-0"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-white truncate hover:underline cursor-pointer">
+                  {currentPlaying.track_name}
+                </p>
+                <p className="text-xs text-neutral-400 truncate hover:underline cursor-pointer">
+                  {currentPlaying.artist_name}
+                </p>
+                <span className="text-[10px] text-[#1db954] block truncate">
+                  req. by @{currentPlaying.requested_by_name}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="text-xs text-neutral-400">
+              <span className="font-semibold text-white">No Track Playing</span>
+              <p className="text-[10px] text-neutral-500">Select any song to start the party</p>
+            </div>
+          )}
+        </div>
+
+        {/* Center: Playback Controls & Progress Bar */}
+        <div className="flex flex-col items-center max-w-xl w-2/4">
+          <div className="flex items-center space-x-5 mb-1.5">
+            <button
+              onClick={() => handleAdvanceTrack('skip')}
+              className="text-neutral-400 hover:text-white transition-colors"
+              title="Next Track"
+            >
+              <SkipForward className="w-5 h-5" />
+            </button>
+
+            {/* Main Play / Pause Button */}
+            <button
+              onClick={togglePlay}
+              className="w-9 h-9 rounded-full bg-white hover:scale-105 active:scale-95 text-black flex items-center justify-center transition-all shadow-md"
+              title={isPlaying ? 'Pause' : 'Play'}
+            >
+              {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+            </button>
+
+            {/* Host Veto Button */}
+            <button
+              onClick={() => handleAdvanceTrack('veto')}
+              className="text-neutral-400 hover:text-rose-400 transition-colors"
+              title="Host Veto: Skip unwanted track"
+            >
+              <Ban className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Scrubber Progress Bar */}
+          <div className="w-full flex items-center space-x-2 text-[11px] font-mono text-neutral-400">
+            <span>{formatDuration(progressMs)}</span>
+            <div className="flex-1 bg-[#4d4d4d] h-1 rounded-full overflow-hidden cursor-pointer group">
+              <div
+                className="bg-white group-hover:bg-[#1db954] h-full rounded-full transition-all"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <span>{formatDuration(effectiveDuration)}</span>
+          </div>
+        </div>
+
+        {/* Right: Volume & Display Controls */}
+        <div className="flex items-center justify-end space-x-3.5 w-1/4 min-w-[200px]">
+          <span className="text-[11px] text-neutral-400 hidden sm:inline-block">
+            {isSimulated ? 'Browser Player' : 'Spotify Connect'}
+          </span>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setIsMuted(!isMuted)}
+              className="text-neutral-400 hover:text-white transition-colors"
+            >
+              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={isMuted ? 0 : volume}
+              onChange={(e) => {
+                setVolume(Number(e.target.value));
+                setIsMuted(false);
+              }}
+              className="w-20 h-1 accent-[#1db954] cursor-pointer"
+            />
+          </div>
+
+          <button
+            onClick={toggleFullscreen}
+            className="text-neutral-400 hover:text-white transition-colors"
+            title="Toggle TV Fullscreen"
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+        </div>
+      </footer>
+
+      {/* Expanded QR Code Modal for TV */}
       {isQrModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/90 backdrop-blur-xl animate-in fade-in"
           onClick={() => setIsQrModalOpen(false)}
         >
           <div
-            className="p-8 bg-neutral-900 border border-neutral-800 rounded-3xl max-w-md w-full flex flex-col items-center text-center shadow-2xl"
+            className="p-8 bg-[#181818] border border-[#282828] rounded-3xl max-w-md w-full flex flex-col items-center text-center shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-xl font-black text-white mb-1">Scan with Phone Camera</h3>
-            <p className="text-xs text-neutral-400 mb-6">Join room to vote and request songs</p>
+            <p className="text-xs text-neutral-400 mb-6">Vote on songs &amp; request tracks from your phone</p>
             <div className="p-4 bg-white rounded-2xl shadow-2xl mb-6">
               <QRCodeSVG value={joinUrl} size={260} level="H" />
             </div>
-            <div className="font-mono text-3xl font-black tracking-widest text-emerald-400 mb-2">
-              {roomCode.toUpperCase()}
+            <div className="font-mono text-3xl font-black tracking-widest text-[#1db954] mb-2">
+              {safeRoomCode}
             </div>
             <button
               onClick={() => setIsQrModalOpen(false)}
@@ -547,38 +785,6 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
           </div>
         </div>
       )}
-
-      {/* Host Search & Add Spotify Tracks Modal */}
-      <SearchModal
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        roomCode={roomCode}
-        guestName="Host"
-        isLimitReached={false}
-        maxRequests={999}
-        userRequestsCount={0}
-        onAddTrack={async (track, guestName) => {
-          const item = await addTrackToQueue(track, guestName);
-          if (!currentPlaying) {
-            await playTrack(track.uri, track.duration_ms);
-          }
-          return item;
-        }}
-      />
-
-      {/* Host Spotify Playlists Modal */}
-      <PlaylistModal
-        isOpen={isPlaylistModalOpen}
-        onClose={() => setIsPlaylistModalOpen(false)}
-        roomCode={roomCode}
-        onAddTrack={async (track, requester) => {
-          const item = await addTrackToQueue(track, requester);
-          if (!currentPlaying) {
-            await playTrack(track.uri, track.duration_ms);
-          }
-          return item;
-        }}
-      />
     </div>
   );
 }
