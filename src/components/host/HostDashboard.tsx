@@ -23,8 +23,11 @@ import {
   AlertTriangle,
   QrCode,
   ExternalLink,
+  Plus,
+  Music,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { SearchModal } from '@/components/guest/SearchModal';
 
 interface HostDashboardProps {
   roomCode: string;
@@ -35,6 +38,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const [token, setToken] = useState<string | null>(initialToken || null);
   const [isCopied, setIsCopied] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [appUrl, setAppUrl] = useState('');
 
@@ -78,6 +82,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     queue,
     currentPlaying,
     activeGuests,
+    addTrackToQueue,
     skipTrack,
     refreshQueue,
   } = useRoomQueue({
@@ -326,6 +331,16 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
                     <Ban className="w-4 h-4" />
                     <span>Host Veto</span>
                   </button>
+
+                  {/* Add Track Button */}
+                  <button
+                    onClick={() => setIsSearchOpen(true)}
+                    className="px-4 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black flex items-center space-x-2 text-sm font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
+                    title="Search and add Spotify track"
+                  >
+                    <Plus className="w-4 h-4 stroke-[2.5]" />
+                    <span>Add Song</span>
+                  </button>
                 </div>
 
                 {/* Simulated / Spotify SDK Mode Badge */}
@@ -343,8 +358,15 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
               </div>
               <h2 className="text-2xl font-black text-white mb-2">Jukebox is Idle</h2>
               <p className="text-neutral-400 text-sm max-w-md mx-auto mb-6">
-                Scan the QR code to join the room on your phone and request the first party track!
+                Scan the QR code to join the room on your phone or search and add Spotify tracks right here!
               </p>
+              <button
+                onClick={() => setIsSearchOpen(true)}
+                className="px-6 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-bold shadow-lg shadow-emerald-500/30 transition-all active:scale-95 inline-flex items-center space-x-2"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span>Search &amp; Add Spotify Track</span>
+              </button>
             </div>
           )}
 
@@ -496,6 +518,24 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
           </div>
         </div>
       )}
+
+      {/* Host Search & Add Spotify Tracks Modal */}
+      <SearchModal
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        roomCode={roomCode}
+        guestName="Host"
+        isLimitReached={false}
+        maxRequests={999}
+        userRequestsCount={0}
+        onAddTrack={async (track, guestName) => {
+          const item = await addTrackToQueue(track, guestName);
+          if (!currentPlaying) {
+            await playTrack(track.uri, track.duration_ms);
+          }
+          return item;
+        }}
+      />
     </div>
   );
 }

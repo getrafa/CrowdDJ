@@ -108,21 +108,24 @@ export async function searchSpotifyTracks(query: string, accessToken?: string) {
     // If Spotify credentials exist, get client credentials token
     if (SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_SECRET && !SPOTIFY_CLIENT_ID.includes('mock')) {
       try {
-        const basicAuth = Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64');
+        const clientId = SPOTIFY_CLIENT_ID.trim();
+        const clientSecret = SPOTIFY_CLIENT_SECRET.trim();
+        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
         const tokenRes = await fetch('https://accounts.spotify.com/api/token', {
           method: 'POST',
           headers: {
             'Authorization': `Basic ${basicAuth}`,
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: new URLSearchParams({ grant_type: 'client_credentials' }),
+          body: 'grant_type=client_credentials',
         });
         if (tokenRes.ok) {
           const tokenData = await tokenRes.json();
           accessToken = tokenData.access_token;
+        } else {
         }
       } catch (err) {
-        console.error('Failed to get client credentials token:', err);
+        console.error('Failed to get Spotify client credentials token:', err);
       }
     }
   }
