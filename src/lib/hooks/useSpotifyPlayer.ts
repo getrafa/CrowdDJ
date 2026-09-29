@@ -44,67 +44,73 @@ export function useSpotifyPlayer({
     let spotifyPlayer: any = null;
 
     const initializeSDK = () => {
-      if (!window.Spotify) return;
-
-      spotifyPlayer = new window.Spotify.Player({
-        name: 'CrowdDJ Host Deck',
-        getOAuthToken: (cb: (token: string) => void) => {
-          cb(token);
-        },
-        volume: 0.8,
-      });
-
-      spotifyPlayer.addListener('ready', ({ device_id }: { device_id: string }) => {
-        setDeviceId(device_id);
-        setIsReady(true);
-        setIsSimulated(false);
-        console.log('Spotify Web Playback SDK Ready with Device ID:', device_id);
-      });
-
-      spotifyPlayer.addListener('not_ready', ({ device_id }: { device_id: string }) => {
-        console.warn('Device ID has gone offline:', device_id);
-        setIsReady(false);
-      });
-
-      spotifyPlayer.addListener('player_state_changed', (state: any) => {
-        if (!state) return;
-
-        setIsPlaying(!state.paused);
-        setProgressMs(state.position);
-        setDurationMs(state.duration);
-
-        // Detect track ending (position reaches end or zero with paused after playing)
-        if (
-          state.paused &&
-          state.position === 0 &&
-          state.restrictions?.disallow_resuming_reasons?.length > 0
-        ) {
-          if (onTrackEndedRef.current) {
-            onTrackEndedRef.current();
-          }
+      try {
+        if (!window.Spotify || !window.Spotify.Player) {
+          return;
         }
-      });
 
-      spotifyPlayer.addListener('initialization_error', ({ message }: { message: string }) => {
-        console.warn('Spotify SDK initialization error:', message);
+        spotifyPlayer = new window.Spotify.Player({
+          name: 'CrowdDJ Host Deck',
+          getOAuthToken: (cb: (token: string) => void) => {
+            cb(token);
+          },
+          volume: 0.8,
+        });
+
+        spotifyPlayer.addListener('ready', ({ device_id }: { device_id: string }) => {
+          setDeviceId(device_id);
+          setIsReady(true);
+          setIsSimulated(false);
+          console.log('Spotify Web Playback SDK Ready with Device ID:', device_id);
+        });
+
+        spotifyPlayer.addListener('not_ready', ({ device_id }: { device_id: string }) => {
+          console.warn('Device ID has gone offline:', device_id);
+          setIsReady(false);
+        });
+
+        spotifyPlayer.addListener('player_state_changed', (state: any) => {
+          if (!state) return;
+
+          setIsPlaying(!state.paused);
+          setProgressMs(state.position);
+          setDurationMs(state.duration);
+
+          if (
+            state.paused &&
+            state.position === 0 &&
+            state.restrictions?.disallow_resuming_reasons?.length > 0
+          ) {
+            if (onTrackEndedRef.current) {
+              onTrackEndedRef.current();
+            }
+          }
+        });
+
+        spotifyPlayer.addListener('initialization_error', ({ message }: { message: string }) => {
+          console.warn('Spotify SDK initialization error:', message);
+          setIsSimulated(true);
+        });
+
+        spotifyPlayer.addListener('authentication_error', ({ message }: { message: string }) => {
+          console.warn('Spotify SDK authentication error:', message);
+          setIsSimulated(true);
+        });
+
+        spotifyPlayer.addListener('account_error', ({ message }: { message: string }) => {
+          console.warn('Spotify SDK account error (Requires Spotify Premium):', message);
+          setIsSimulated(true);
+        });
+
+        spotifyPlayer.connect();
+        setPlayer(spotifyPlayer);
+      } catch (sdkErr) {
+        console.warn('Could not construct Spotify Player:', sdkErr);
         setIsSimulated(true);
-      });
-
-      spotifyPlayer.addListener('authentication_error', ({ message }: { message: string }) => {
-        console.warn('Spotify SDK authentication error:', message);
-        setIsSimulated(true);
-      });
-
-      spotifyPlayer.addListener('account_error', ({ message }: { message: string }) => {
-        console.warn('Spotify SDK account error (Requires Spotify Premium):', message);
-        setIsSimulated(true);
-      });
-
-      spotifyPlayer.connect();
-      setPlayer(spotifyPlayer);
+      }
     };
 
-    if (window.Spotify) {
+    if (window.Spotify?.Player) {
       initializeSDK();
     } else {
       window.onSpotifyWebPlaybackSDKReady = initializeSDK;
