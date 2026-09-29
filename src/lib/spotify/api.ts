@@ -13,7 +13,9 @@ export const SPOTIFY_SCOPES = [
 ].join(' ');
 
 export function getSpotifyAuthUrl(roomCode?: string, customOrigin?: string): string {
-  const origin = customOrigin || process.env.NEXT_PUBLIC_APP_URL || 'http://127.0.0.1:3000';
+  // Always prioritize configured NEXT_PUBLIC_APP_URL in production so preview URLs match Spotify dashboard
+  const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
+  const origin = configuredAppUrl || customOrigin || 'http://127.0.0.1:3000';
   const redirectUri = `${origin}/api/auth/spotify/callback`;
   const state = roomCode ? `room_${roomCode}` : `new_${Date.now()}`;
   const params = new URLSearchParams({
