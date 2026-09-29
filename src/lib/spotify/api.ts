@@ -13,9 +13,8 @@ export const SPOTIFY_SCOPES = [
 ].join(' ');
 
 export function getSpotifyAuthUrl(roomCode?: string, customOrigin?: string): string {
-  // Always prioritize configured NEXT_PUBLIC_APP_URL in production so preview URLs match Spotify dashboard
-  const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  const origin = configuredAppUrl || customOrigin || 'http://127.0.0.1:3000';
+  // Use the exact origin the user is currently visiting (e.g. acomusic.vercel.app)
+  const origin = customOrigin || process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'http://127.0.0.1:3000';
   const redirectUri = `${origin}/api/auth/spotify/callback`;
   const state = roomCode ? `room_${roomCode}` : `new_${Date.now()}`;
   const params = new URLSearchParams({

@@ -9,8 +9,7 @@ export async function GET(request: NextRequest) {
   const state = searchParams.get('state') || '';
   const error = searchParams.get('error');
 
-  const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  const appUrl = configuredAppUrl || request.nextUrl.origin || 'http://127.0.0.1:3000';
+  const appUrl = request.nextUrl.origin || process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'http://127.0.0.1:3000';
 
   if (error || !code) {
     return NextResponse.redirect(`${appUrl}/?error=${encodeURIComponent(error || 'auth_failed')}`);
