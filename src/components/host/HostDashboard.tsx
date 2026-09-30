@@ -37,6 +37,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { SpotifyIframePlayer } from './SpotifyIframePlayer';
 
 interface HostDashboardProps {
   roomCode: string;
@@ -88,6 +89,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
+  const [showPlaylistEmbed, setShowPlaylistEmbed] = useState(true);
 
   // Determine current domain for QR code
   useEffect(() => {
@@ -542,7 +544,39 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
                 <span>Import Playlist to Party Queue</span>
               </button>
             )}
+
+            {selectedPlaylist && (
+              <button
+                onClick={() => setShowPlaylistEmbed(!showPlaylistEmbed)}
+                className={`px-4 py-2.5 rounded-full text-xs font-bold transition-all border flex items-center space-x-2 ${
+                  showPlaylistEmbed
+                    ? 'bg-[#1db954]/20 border-[#1db954]/50 text-[#1db954]'
+                    : 'bg-[#282828] border-white/5 text-neutral-300 hover:text-white'
+                }`}
+              >
+                <Radio className="w-4 h-4" />
+                <span>{showPlaylistEmbed ? 'Hide Spotify Player' : 'Official Spotify Player'}</span>
+              </button>
+            )}
           </div>
+
+          {/* Official Spotify Playlist Player Embed */}
+          {selectedPlaylist && showPlaylistEmbed && (
+            <div className="px-8 py-3 bg-black/40 border-b border-[#282828]">
+              <div className="flex items-center justify-between text-xs font-bold text-neutral-400 mb-2 uppercase tracking-wider">
+                <span className="flex items-center space-x-1.5">
+                  <Music className="w-3.5 h-3.5 text-[#1db954]" />
+                  <span>Official Spotify Player: {selectedPlaylist.name}</span>
+                </span>
+                <span className="text-[10px] text-[#1db954] font-mono">Official Spotify Embed</span>
+              </div>
+              <SpotifyIframePlayer
+                playlistId={selectedPlaylist.id}
+                height={152}
+                onTrackEnded={() => handleAdvanceTrack('finish')}
+              />
+            </div>
+          )}
 
           {/* Songs Table Header */}
           <div className="px-8 py-3 text-xs font-semibold text-neutral-400 grid grid-cols-12 gap-4 border-b border-[#282828]/60 uppercase tracking-wider sticky top-0 bg-[#121212]/95 backdrop-blur-md z-10">
@@ -652,6 +686,22 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
 
         {/* 3. RIGHT SIDEBAR: CrowdDJ Party HUD & Live Queue */}
         <aside className="w-80 bg-black/90 backdrop-blur-md border-l border-[#282828] flex flex-col p-4 shrink-0 overflow-y-auto">
+          {/* Official Spotify IFrame Player */}
+          <div className="p-3.5 rounded-2xl bg-[#181818] border border-[#282828] mb-4">
+            <div className="flex items-center justify-between text-xs font-bold text-neutral-400 mb-2 px-1 uppercase tracking-wider">
+              <span className="flex items-center space-x-1.5">
+                <Music className="w-3.5 h-3.5 text-[#1db954]" />
+                <span>Spotify Player</span>
+              </span>
+              <span className="text-[10px] text-[#1db954] font-mono">Official Embed</span>
+            </div>
+            <SpotifyIframePlayer
+              trackUri={currentPlaying?.track_uri}
+              height={152}
+              onTrackEnded={() => handleAdvanceTrack('finish')}
+            />
+          </div>
+
           {/* Top Room Banner */}
           <div className="p-4 rounded-2xl bg-[#181818] border border-[#282828] mb-4 text-center">
             <span className="text-[11px] uppercase tracking-wider font-extrabold text-[#1db954]">
