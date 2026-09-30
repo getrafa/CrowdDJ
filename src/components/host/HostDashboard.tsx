@@ -53,7 +53,21 @@ interface Playlist {
 }
 
 export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
-  const [token, setToken] = useState<string | null>(initialToken || null);
+  const [token, setToken] = useState<string | null>(() => {
+    if (initialToken) return initialToken;
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('spotify_host_token') || localStorage.getItem('spotify_host_token');
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (token && typeof window !== 'undefined') {
+      sessionStorage.setItem('spotify_host_token', token);
+      localStorage.setItem('spotify_host_token', token);
+    }
+  }, [token]);
+
   const [isCopied, setIsCopied] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -63,6 +77,9 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [playlistTracks, setPlaylistTracks] = useState<SpotifyTrack[]>([]);
+  const [topTracks, setTopTracks] = useState<SpotifyTrack[]>([]);
+  const [topHitsTitle, setTopHitsTitle] = useState('Top Party Hits');
+  const [isTopHitsActive, setIsTopHitsActive] = useState(false);
   const [loadingPlaylists, setLoadingPlaylists] = useState(false);
   const [loadingTracks, setLoadingTracks] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -152,6 +169,35 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     }
   }, [currentPlaying, durationMs, setDurationMs]);
 
+  // Fetch top party tracks or user's top tracks
+  const fetchTopTracks = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : '';
+      const res = await fetch(`/api/spotify/top-tracks?roomCode=${encodeURIComponent(safeRoomCode)}${tokenQuery}`, { headers });
+      const data = await res.json();
+      if (data.tracks && Array.isArray(data.tracks)) {
+        setTopTracks(data.tracks);
+        if (data.title) setTopHitsTitle(data.title);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch top tracks:', err);
+    }
+  }, [safeRoomCode, token]);
+
+  useEffect(() => {
+    fetchTopTracks();
+  }, [fetchTopTracks]);
+
+  const handleSelectTopHits = () => {
+    setSelectedPlaylist(null);
+    setSearchQuery('');
+    setIsTopHitsActive(true);
+  };
+
   // Fetch host's actual Spotify playlists
   const fetchPlaylists = useCallback(async () => {
     setLoadingPlaylists(true);
@@ -168,16 +214,13 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
       }
       if (data.playlists && Array.isArray(data.playlists)) {
         setPlaylists(data.playlists);
-        if (data.playlists.length > 0 && !selectedPlaylist) {
-          handleSelectPlaylist(data.playlists[0]);
-        }
       }
     } catch (err) {
       console.error('Failed to load host playlists:', err);
     } finally {
       setLoadingPlaylists(false);
     }
-  }, [safeRoomCode, selectedPlaylist, token]);
+  }, [safeRoomCode, token]);
 
   useEffect(() => {
     fetchPlaylists();
@@ -185,6 +228,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
 
   // Fetch songs inside selected playlist
   const handleSelectPlaylist = async (playlist: Playlist) => {
+    setIsTopHitsActive(false);
     setSelectedPlaylist(playlist);
     setSearchQuery('');
     setPlaylistTracks([]);
@@ -273,14 +317,20 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     }
   };
 
-  // Queue entire playlist at once
+  const displayedTracks = searchQuery.trim()
+    ? searchResults
+    : isTopHitsActive || !selectedPlaylist
+    ? topTracks
+    : playlistTracks;
+
+  // Queue entire playlist or top tracks at once
   const handleQueueAllPlaylist = async () => {
-    if (!playlistTracks.length) return;
-    for (const track of playlistTracks) {
+    if (!displayedTracks.length) return;
+    for (const track of displayedTracks) {
       await addTrackToQueue(track, 'Host');
     }
-    if (!currentPlaying && playlistTracks[0]) {
-      await playTrack(playlistTracks[0].uri, playlistTracks[0].duration_ms);
+    if (!currentPlaying && displayedTracks[0]) {
+      await playTrack(displayedTracks[0].uri, displayedTracks[0].duration_ms);
     }
   };
 
@@ -310,8 +360,6 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const effectiveDuration = durationMs || currentPlaying?.duration_ms || 180000;
   const progressPercent = Math.min(100, (progressMs / effectiveDuration) * 100);
 
-  const displayedTracks = searchQuery.trim() ? searchResults : playlistTracks;
-
   return (
     <div className="flex flex-col h-screen w-screen bg-[#121212] text-white overflow-hidden font-sans select-none">
       {/* Dynamic Ambient Background Glow */}
@@ -340,16 +388,17 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
           {/* Navigation Links */}
           <nav className="space-y-1 mb-6 text-sm font-semibold">
             <button
-              onClick={() => {
-                setSearchQuery('');
-                if (playlists[0]) handleSelectPlaylist(playlists[0]);
-              }}
-              className="flex items-center space-x-3 w-full px-3 py-2.5 rounded-lg text-neutral-300 hover:text-white hover:bg-[#282828] transition-colors"
+              onClick={handleSelectTopHits}
+              className={`flex items-center space-x-3 w-full px-3 py-2.5 rounded-lg transition-colors ${
+                isTopHitsActive || (!selectedPlaylist && !searchQuery.trim())
+                  ? 'bg-[#282828] text-[#1db954] font-bold shadow'
+                  : 'text-neutral-300 hover:text-white hover:bg-[#282828]'
+              }`}
             >
-              <Home className="w-5 h-5 text-neutral-400" />
-              <span>Your Library</span>
+              <Flame className="w-5 h-5 text-[#1db954]" />
+              <span>Top Party Hits</span>
             </button>
-            <div className="relative">
+            <div className="relative pt-1">
               <input
                 type="text"
                 value={searchQuery}
@@ -418,6 +467,10 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
               <div className="w-44 h-44 rounded-2xl bg-[#282828] shadow-2xl flex items-center justify-center text-[#1db954] shrink-0 border border-white/10">
                 <Search className="w-16 h-16" />
               </div>
+            ) : isTopHitsActive || !selectedPlaylist ? (
+              <div className="w-44 h-44 rounded-2xl bg-gradient-to-br from-amber-500 to-rose-600 shadow-2xl flex items-center justify-center text-white shrink-0 border border-white/10">
+                <Flame className="w-16 h-16 fill-current animate-pulse text-white" />
+              </div>
             ) : (
               <img
                 src={selectedPlaylist?.images?.[0]?.url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400'}
@@ -428,19 +481,31 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
 
             <div className="min-w-0 flex-1">
               <span className="text-xs uppercase font-extrabold tracking-widest text-[#1db954]">
-                {searchQuery.trim() ? 'Spotify Search' : 'Public Playlist'}
+                {searchQuery.trim()
+                  ? 'Spotify Search'
+                  : isTopHitsActive || !selectedPlaylist
+                  ? 'CrowdDJ Featured'
+                  : 'Public Playlist'}
               </span>
               <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-white tracking-tight mt-1 truncate">
-                {searchQuery.trim() ? `Search: "${searchQuery}"` : selectedPlaylist?.name || 'Your Spotify Music'}
+                {searchQuery.trim()
+                  ? `Search: "${searchQuery}"`
+                  : isTopHitsActive || !selectedPlaylist
+                  ? topHitsTitle
+                  : selectedPlaylist?.name || 'Your Spotify Music'}
               </h1>
               <p className="text-xs sm:text-sm text-neutral-400 mt-2 line-clamp-2">
                 {searchQuery.trim()
                   ? `Showing top Spotify tracks matching "${searchQuery}"`
+                  : isTopHitsActive || !selectedPlaylist
+                  ? 'High-energy tracks ready to play and vote on in the CrowdDJ room.'
                   : selectedPlaylist?.description || 'Select any song to play or queue to the party room.'}
               </p>
               <div className="flex items-center space-x-2 mt-3 text-xs text-neutral-300">
                 <span className="font-semibold text-white">
-                  {selectedPlaylist?.owner?.display_name || 'Host'}
+                  {isTopHitsActive || !selectedPlaylist
+                    ? 'Spotify'
+                    : selectedPlaylist?.owner?.display_name || 'Host'}
                 </span>
                 <span>&bull;</span>
                 <span>
@@ -562,15 +627,24 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
 
             {displayedTracks.length === 0 && !loadingTracks && (
               <div className="py-20 text-center text-xs text-neutral-400 max-w-sm mx-auto flex flex-col items-center space-y-3">
-                <p>No songs found in this selection.</p>
-                {selectedPlaylist && (
+                <p className="text-neutral-300 font-medium">No songs found in this selection.</p>
+                <div className="flex items-center space-x-3">
+                  {selectedPlaylist && (
+                    <button
+                      onClick={() => handleSelectPlaylist(selectedPlaylist)}
+                      className="px-4 py-2 rounded-full bg-[#282828] hover:bg-[#383838] text-white text-xs font-semibold border border-white/10 transition-all hover:scale-105 active:scale-95"
+                    >
+                      Refresh
+                    </button>
+                  )}
                   <button
-                    onClick={() => handleSelectPlaylist(selectedPlaylist)}
-                    className="px-4 py-1.5 rounded-full bg-[#282828] hover:bg-[#383838] text-white text-xs font-semibold border border-white/10 transition-all hover:scale-105 active:scale-95"
+                    onClick={handleSelectTopHits}
+                    className="px-4 py-2 rounded-full bg-[#1db954] hover:bg-[#1ed760] text-black text-xs font-bold transition-all hover:scale-105 active:scale-95 flex items-center space-x-1.5"
                   >
-                    Refresh Songs
+                    <Flame className="w-3.5 h-3.5 fill-current" />
+                    <span>View Top Party Hits</span>
                   </button>
-                )}
+                </div>
               </div>
             )}
           </div>
@@ -766,6 +840,18 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
 
         {/* Right: Volume & Display Controls */}
         <div className="flex items-center justify-end space-x-3.5 w-1/4 min-w-[200px]">
+          {currentPlaying?.track_uri && (
+            <a
+              href={`https://open.spotify.com/track/${currentPlaying.track_uri.replace('spotify:track:', '')}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-neutral-400 hover:text-[#1db954] transition-colors p-1"
+              title="Open Track in Spotify App"
+            >
+              <Share2 className="w-4 h-4" />
+            </a>
+          )}
+
           <span className="text-[11px] text-neutral-400 hidden sm:inline-block">
             {isSimulated ? 'Browser Player' : 'Spotify Connect'}
           </span>

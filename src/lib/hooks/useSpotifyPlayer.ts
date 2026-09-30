@@ -159,22 +159,46 @@ export function useSpotifyPlayer({
       setProgressMs(0);
       setIsPlaying(true);
 
-      if (!isSimulated && player && deviceId && token) {
-        try {
-          await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
-            method: 'PUT',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ uris: [trackUri] }),
-          });
-        } catch (err) {
-          console.error('Failed to trigger Spotify playback:', err);
+      if (token && !token.includes('mock') && !token.includes('placeholder')) {
+        let playedOnWebSdk = false;
+
+        // Strategy A: Web Playback SDK device
+        if (deviceId && !isSimulated) {
+          try {
+            const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ uris: [trackUri] }),
+            });
+            if (res.ok) {
+              playedOnWebSdk = true;
+            }
+          } catch (err) {
+            console.warn('Web SDK playback failed:', err);
+          }
+        }
+
+        // Strategy B: Remote Spotify playback (e.g. Spotify Desktop App, mobile app, web player)
+        if (!playedOnWebSdk) {
+          try {
+            await fetch('https://api.spotify.com/v1/me/player/play', {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ uris: [trackUri] }),
+            });
+          } catch (remoteErr) {
+            console.warn('Remote Spotify player playback failed:', remoteErr);
+          }
         }
       }
     },
-    [isSimulated, player, deviceId, token]
+    [isSimulated, deviceId, token]
   );
 
   // Toggle play/pause
