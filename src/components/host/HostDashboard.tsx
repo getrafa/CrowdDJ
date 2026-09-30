@@ -156,8 +156,16 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const fetchPlaylists = useCallback(async () => {
     setLoadingPlaylists(true);
     try {
-      const res = await fetch(`/api/spotify/playlists?roomCode=${encodeURIComponent(safeRoomCode)}`);
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : '';
+      const res = await fetch(`/api/spotify/playlists?roomCode=${encodeURIComponent(safeRoomCode)}${tokenQuery}`, { headers });
       const data = await res.json();
+      if (data.newAccessToken) {
+        setToken(data.newAccessToken);
+      }
       if (data.playlists && Array.isArray(data.playlists)) {
         setPlaylists(data.playlists);
         if (data.playlists.length > 0 && !selectedPlaylist) {
@@ -169,7 +177,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     } finally {
       setLoadingPlaylists(false);
     }
-  }, [safeRoomCode, selectedPlaylist]);
+  }, [safeRoomCode, selectedPlaylist, token]);
 
   useEffect(() => {
     fetchPlaylists();
@@ -179,14 +187,26 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
   const handleSelectPlaylist = async (playlist: Playlist) => {
     setSelectedPlaylist(playlist);
     setSearchQuery('');
+    setPlaylistTracks([]);
     setLoadingTracks(true);
     try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : '';
       const res = await fetch(
-        `/api/spotify/playlists/${playlist.id}?roomCode=${encodeURIComponent(safeRoomCode)}`
+        `/api/spotify/playlists/${playlist.id}?roomCode=${encodeURIComponent(safeRoomCode)}${tokenQuery}`,
+        { headers }
       );
       const data = await res.json();
+      if (data.newAccessToken) {
+        setToken(data.newAccessToken);
+      }
       if (data.tracks && Array.isArray(data.tracks)) {
         setPlaylistTracks(data.tracks);
+      } else {
+        console.warn('Playlist tracks response without array:', data);
       }
     } catch (err) {
       console.error('Failed to load playlist songs:', err);
@@ -205,8 +225,14 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
+        const headers: Record<string, string> = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : '';
         const res = await fetch(
-          `/api/spotify/search?q=${encodeURIComponent(searchQuery)}&roomCode=${encodeURIComponent(safeRoomCode)}`
+          `/api/spotify/search?q=${encodeURIComponent(searchQuery)}&roomCode=${encodeURIComponent(safeRoomCode)}${tokenQuery}`,
+          { headers }
         );
         const data = await res.json();
         if (data.tracks) {
@@ -220,7 +246,7 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, safeRoomCode]);
+  }, [searchQuery, safeRoomCode, token]);
 
   // Play track immediately & queue to party
   const handlePlayNow = async (track: SpotifyTrack) => {
@@ -417,7 +443,15 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
                   {selectedPlaylist?.owner?.display_name || 'Host'}
                 </span>
                 <span>&bull;</span>
-                <span>{displayedTracks.length} songs</span>
+                <span>
+                  {loadingTracks
+                    ? 'Loading tracks...'
+                    : displayedTracks.length > 0
+                    ? `${displayedTracks.length} songs`
+                    : selectedPlaylist?.tracks?.total
+                    ? `${selectedPlaylist.tracks.total} songs`
+                    : '0 songs'}
+                </span>
               </div>
             </div>
           </div>
@@ -527,8 +561,16 @@ export function HostDashboard({ roomCode, initialToken }: HostDashboardProps) {
             })}
 
             {displayedTracks.length === 0 && !loadingTracks && (
-              <div className="py-20 text-center text-xs text-neutral-500">
-                No songs found in this selection.
+              <div className="py-20 text-center text-xs text-neutral-400 max-w-sm mx-auto flex flex-col items-center space-y-3">
+                <p>No songs found in this selection.</p>
+                {selectedPlaylist && (
+                  <button
+                    onClick={() => handleSelectPlaylist(selectedPlaylist)}
+                    className="px-4 py-1.5 rounded-full bg-[#282828] hover:bg-[#383838] text-white text-xs font-semibold border border-white/10 transition-all hover:scale-105 active:scale-95"
+                  >
+                    Refresh Songs
+                  </button>
+                )}
               </div>
             )}
           </div>

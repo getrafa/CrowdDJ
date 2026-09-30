@@ -11,15 +11,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ tracks: [] });
   }
 
-  let hostToken: string | undefined = undefined;
+  const authHeader = request.headers.get('Authorization');
+  let hostToken: string | undefined = authHeader?.startsWith('Bearer ')
+    ? authHeader.substring(7).trim()
+    : searchParams.get('token') || request.cookies.get('spotify_access_token')?.value || undefined;
 
-  if (roomCode) {
+  if (roomCode && !hostToken) {
     try {
       const supabase = createServerClient();
       const { data: room } = await supabase
         .from('rooms')
         .select('host_spotify_token')
-        .eq('room_code', roomCode)
+        .eq('room_code', roomCode.toUpperCase())
         .single();
 
       if (room?.host_spotify_token) {

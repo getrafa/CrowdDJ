@@ -10,7 +10,32 @@ export const SPOTIFY_SCOPES = [
   'user-modify-playback-state',
   'user-read-currently-playing',
   'playlist-read-private',
+  'playlist-read-collaborative',
 ].join(' ');
+
+export async function getClientCredentialsToken(): Promise<string | null> {
+  if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET || SPOTIFY_CLIENT_ID.includes('mock')) {
+    return null;
+  }
+  try {
+    const basicAuth = Buffer.from(`${SPOTIFY_CLIENT_ID.trim()}:${SPOTIFY_CLIENT_SECRET.trim()}`).toString('base64');
+    const tokenRes = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: 'grant_type=client_credentials',
+    });
+    if (tokenRes.ok) {
+      const data = await tokenRes.json();
+      return data.access_token;
+    }
+  } catch (err) {
+    console.error('Error fetching client credentials token:', err);
+  }
+  return null;
+}
 
 export function getSpotifyAuthUrl(roomCode?: string, customOrigin?: string): string {
   // Use the exact origin the user is currently visiting (e.g. acomusic.vercel.app)
@@ -115,21 +140,143 @@ export async function getUserPlaylists(accessToken: string) {
 }
 
 export async function getPlaylistTracks(playlistId: string, accessToken: string) {
-  const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
+  const cleanId = playlistId.replace('spotify:playlist:', '').trim();
+  let items: any[] = [];
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch playlist tracks: ${response.statusText}`);
+  const fetchWithToken = (url: string, tok: string) =>
+    fetch(url, {
+      headers: {
+        Authorization: `Bearer ${tok}`,
+      },
+    });
+
+  let tokenToUse = accessToken;
+  if (!tokenToUse || tokenToUse.includes('mock') || tokenToUse.includes('placeholder')) {
+    const cc = await getClientCredentialsToken();
+    if (cc) tokenToUse = cc;
   }
 
-  const data = await response.json();
-  // Filter out null tracks or podcasts
-  return (data.items || [])
-    .map((item: any) => item.track)
-    .filter((track: any) => track && track.id && track.uri);
+  let success = false;
+
+  // Strategy 1: Try /items (modern Spotify Web API standard)
+  if (tokenToUse) {
+    try {
+      const res = await fetchWithToken(
+        `https://api.spotify.com/v1/playlists/${cleanId}/items?limit=100`,
+        tokenToUse
+      );
+      if (res.ok) {
+        const data = await res.json();
+        items = data.items || [];
+        success = true;
+      } else {
+        console.warn(`GET /playlists/${cleanId}/items status ${res.status}`);
+      }
+    } catch (err) {
+      console.warn('Strategy 1 (/items) error:', err);
+    }
+  }
+
+  // Strategy 2: Fallback to /tracks
+  if (!success && tokenToUse) {
+    try {
+      const res = await fetchWithToken(
+        `https://api.spotify.com/v1/playlists/${cleanId}/tracks?limit=100`,
+        tokenToUse
+      );
+      if (res.ok) {
+        const data = await res.json();
+        items = data.items || [];
+        success = true;
+      } else {
+        console.warn(`GET /playlists/${cleanId}/tracks status ${res.status}`);
+      }
+    } catch (err) {
+      console.warn('Strategy 2 (/tracks) error:', err);
+    }
+  }
+
+  // Strategy 3: Fallback to full playlist GET /playlists/{id}
+  if (!success && tokenToUse) {
+    try {
+      const res = await fetchWithToken(
+        `https://api.spotify.com/v1/playlists/${cleanId}`,
+        tokenToUse
+      );
+      if (res.ok) {
+        const full = await res.json();
+        items = full.tracks?.items || [];
+        success = true;
+      } else {
+        console.warn(`GET /playlists/${cleanId} status ${res.status}`);
+      }
+    } catch (err) {
+      console.warn('Strategy 3 (full playlist) error:', err);
+    }
+  }
+
+  // Strategy 4: If user token failed (e.g. 403 Forbidden or scope issue on public/transferred playlist),
+  // try with Client Credentials token
+  if (!success) {
+    const ccToken = await getClientCredentialsToken();
+    if (ccToken && ccToken !== tokenToUse) {
+      console.log(`Attempting client credentials token for playlist ${cleanId}...`);
+      try {
+        let res = await fetchWithToken(
+          `https://api.spotify.com/v1/playlists/${cleanId}/items?limit=100`,
+          ccToken
+        );
+        if (!res.ok) {
+          res = await fetchWithToken(
+            `https://api.spotify.com/v1/playlists/${cleanId}/tracks?limit=100`,
+            ccToken
+          );
+        }
+        if (!res.ok) {
+          res = await fetchWithToken(
+            `https://api.spotify.com/v1/playlists/${cleanId}`,
+            ccToken
+          );
+          if (res.ok) {
+            const full = await res.json();
+            items = full.tracks?.items || [];
+            success = true;
+          }
+        } else {
+          const data = await res.json();
+          items = data.items || [];
+          success = true;
+        }
+      } catch (err) {
+        console.warn('Strategy 4 (client credentials) error:', err);
+      }
+    }
+  }
+
+  // Normalize tracks into SpotifyTrack schema
+  return items
+    .map((item: any) => {
+      const track = item.track || item;
+      if (!track || (!track.id && !track.uri) || track.is_local) {
+        return null;
+      }
+      return {
+        id: track.id || track.uri,
+        uri: track.uri,
+        name: track.name || 'Unknown Track',
+        artists: Array.isArray(track.artists) && track.artists.length > 0
+          ? track.artists.map((a: any) => ({ id: a.id || 'artist', name: a.name || 'Unknown Artist' }))
+          : [{ id: 'artist', name: 'Unknown Artist' }],
+        album: {
+          name: track.album?.name || 'Single',
+          images: track.album?.images || [
+            { url: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300', height: 300, width: 300 },
+          ],
+        },
+        duration_ms: track.duration_ms || 180000,
+      };
+    })
+    .filter(Boolean);
 }
 
 export async function searchSpotifyTracks(query: string, accessToken?: string) {
